@@ -54,10 +54,13 @@ def binary_LDS(
     
     weights = np.random.binomial(1, binary_prob, size=(num_samples, num_features))
     
-    X = weights @ basis + np.random.normal(
-        loc=0.0, scale=noise_scale, size=(num_samples, D)
-    )
+    X = weights @ basis 
     
+    X = X[np.sum(X, axis = 1) > 0] * 1.0
+    X += np.random.normal(
+        loc=0.0, scale=noise_scale, size=(len(X), D)
+    )
+
     return X, weights
 
 

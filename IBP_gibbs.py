@@ -2,6 +2,8 @@ from typing import Dict, Any, Optional
 
 import numpy as np
 
+import random
+
 from tqdm import trange
 
 from utils.general_utils import (
@@ -11,6 +13,7 @@ from utils.general_utils import (
     log_Poisson_prob, 
     bounded_random_walk, 
 )
+from utils.data import binary_LDS
 
 
 class IndianBuffetProcessGibbs:
@@ -57,6 +60,7 @@ class IndianBuffetProcessGibbs:
             for k in range(K):
                 mk = np.sum(Z[:, k])
                 Z[n, k] = sampling_bernoulli(mk/(n+1)) # TODO: 1 / (n+1)?
+                # Z[n, k] = sampling_bernoulli(1 / (n + 1))
             K_new = np.random.poisson(self.alpha / (n+1))
             K += K_new
             
@@ -81,26 +85,27 @@ class IndianBuffetProcessGibbs:
             for i in pbar:
                 self.step()
                 
-                log_p_X_Z = self.log_p_X_Z()
+                # log_p_X_Z = self.log_p_X_Z()
                 
                 history["Z"].append(self.Z)
                 history["K"][i] = self.K
                 history["sigma_x"][i] = self.sigma_x
                 history["sigma_A"][i] = self.sigma_A
                 history["alpha"][i] = self.alpha
-                history["log_p_X_Z"][i] = log_p_X_Z
+                
+                pbar.set_description(f"Current K = {self.K}")
+                # history["log_p_X_Z"][i] = log_p_X_Z
         
         return history
         
     def step(self):
-        for n in np.random.choice(np.arange(self.N), (self.N, )):
-            for k in range(self.K):
-                self.sample_Z(n, k)
-                self.sample_K(n)
+        for n in random.sample(range(self.N), self.N):
+            self.sample_Z(n)
+            self.sample_K(n)
             
-            self.sample_alpha()
-            self.sample_sigma_x()
-            self.sample_sigma_A()
+        self.sample_alpha()
+        self.sample_sigma_x()
+        self.sample_sigma_A()
         
     def log_conditional_X_given_Z(
         self, 
@@ -115,40 +120,42 @@ class IndianBuffetProcessGibbs:
         if sigma_A is None:
             sigma_A = self.sigma_A
             
-        K = self.Z.shape[-1]
-        M = np.linalg.inv(self.Z.T @ self.Z + np.square(sigma_x / sigma_A) * np.eye(K))
+        K = Z.shape[-1]
+        M = np.linalg.inv(Z.T @ Z + np.square(sigma_x / sigma_A) * np.eye(K))
         exponent = -1 / (2 * sigma_x ** 2) * np.trace(
-            self.X.T @ (np.eye(self.N) - self.Z @ M @ self.Z.T) @ self.X
+            self.X.T @ (np.eye(self.N) - Z @ M @ Z.T) @ self.X
         )
         normalising_constant = -self.N * self.D * np.log(2 * np.pi) / 2  - \
             self.D * (self.N - K) * np.log(sigma_x) - \
-                self.K * self.D * np.log(sigma_A) - \
-                    self.D * np.linalg.det(self.Z.T @ self.Z + np.square(sigma_x / sigma_A) * np.eye(K)) / 2
+                K * self.D * np.log(sigma_A) + \
+                    self.D * np.log(np.linalg.det(M)) / 2
         
         return normalising_constant + exponent
     
-    def sample_Z(self, n: int, k: int):
-        mk = np.sum(self.Z[:, k]) - self.Z[n, k]
-        if mk == 0:
-            self.Z[n, k] = 0
-        else:
-            Z0 = self.Z + 0
-            Z1 = self.Z + 0
-            Z0[n, k] = 0
-            Z0[n, k] = 1
-            log_ratio = self.log_conditional_X_given_Z(Z1) - self.log_conditional_X_given_Z(Z0) + np.log(mk) - np.log(self.N - mk)
-            self.Z[n, k] = sampling_bernoulli(log_ratio, type="logdiff")
+    def sample_Z(self, n: int):
+        for k in range(self.K):
+            mk = np.sum(self.Z[:, k]) - self.Z[n, k]
+            if mk == 0:
+                self.Z[n, k] = 0
+            else:
+                Z0 = self.Z + 0
+                Z1 = self.Z + 0
+                Z0[n, k] = 0
+                Z1[n, k] = 1
+                log_ratio = self.log_conditional_X_given_Z(Z1) - self.log_conditional_X_given_Z(Z0) + np.log(mk) - np.log(self.N - mk)
+                self.Z[n, k] = sampling_bernoulli(log_ratio, type="logdiff")
     
     def sample_K(self, n: int, log_threshold: float = -16.0):
-        log_probs = []
+        log_probs = np.array([])
         K_new = 0
-        lmd = self.alpha / n # TODO: self.alpha / self.N?
+        # lmd = self.alpha / n # TODO: self.alpha / self.N?
+        lmd = self.alpha / self.N
         
-        while log_Poisson_prob(K_new) > log_threshold:
-            log_probs.append(log_Poisson_prob(K_new, lmd) + self.log_conditional_X_given_Z(expand_Z(self.Z, n, K_new)))
+        while log_Poisson_prob(K_new, lmd) > log_threshold:
+            log_probs = np.append(log_probs, log_Poisson_prob(K_new, lmd) + self.log_conditional_X_given_Z(expand_Z(self.Z, n, K_new)))
             K_new += 1
         
-        log_probs = np.array(log_probs)
+        # log_probs = np.array(log_probs)
         log_probs -= np.max(log_probs)
         probs = np.exp(log_probs)
         probs /= np.sum(probs)
@@ -160,29 +167,31 @@ class IndianBuffetProcessGibbs:
         
     def sample_alpha(self):
         posterior_alpha_a = self.prior_alpha_a + self.K
-        posterior_alpha_b=  self.prior_alpha_b + np.sum(1. / np.arange(1, self.N + 1))
+        posterior_alpha_b = self.prior_alpha_b + 1. / np.sum(1. / np.arange(1, self.N + 1))
         
         self.alpha = np.random.gamma(posterior_alpha_a, posterior_alpha_b)
         
     def sample_sigma_x(self, epsilon: float = 0.01):
         new_sigma_x = bounded_random_walk(self.sigma_x, epsilon, boundary=[0, None])
         log_p = (self.prior_sigma_x_a - 1) * (np.log(new_sigma_x) - np.log(self.sigma_x)) - \
-            self.prior_sigma_x_b * (new_sigma_x - self.sigma_x) + \
+            self.prior_sigma_x_b * (1 / new_sigma_x - 1 / self.sigma_x) + \
                 self.log_conditional_X_given_Z(sigma_x=new_sigma_x) - \
                     self.log_conditional_X_given_Z()
         
-        if sampling_bernoulli(min(0, log_p), type="logdiff"): # `TODO: log type?
-            self.sigam_x = new_sigma_x
+        # if sampling_bernoulli(min(0, log_p), type="logdiff"): # `TODO: log type?
+        if sampling_bernoulli(min(0, log_p), type="log"):
+            self.sigma_x = new_sigma_x
         
     def sample_sigma_A(self, epsilon: float = 0.01):
         new_sigma_A = bounded_random_walk(self.sigma_A, epsilon, boundary=[0, None])
         log_p = (self.prior_sigma_A_a - 1) * (np.log(new_sigma_A) - np.log(self.sigma_A)) - \
-            self.prior_sigma_A_b * (new_sigma_A - self.sigma_A) + \
-                self.log_conditional_X_given_Z(sigma_x=new_sigma_A) - \
+            self.prior_sigma_A_b * (1 / new_sigma_A - 1 / self.sigma_A) + \
+                self.log_conditional_X_given_Z(sigma_A=new_sigma_A) - \
                     self.log_conditional_X_given_Z()
         
-        if sampling_bernoulli(min(0, log_p), type="log"): # `TODO: should we use logdiff type?
-            self.sigam_A = new_sigma_A
+        # if sampling_bernoulli(min(0, log_p), type="log"): # `TODO: should we use logdiff type?
+        if sampling_bernoulli(min(0, log_p), type="log"):
+            self.sigma_A = new_sigma_A
     
     def posterior_mean_A(self):
         K = self.Z.shape[-1]
@@ -194,10 +203,10 @@ class IndianBuffetProcessGibbs:
         
         for n in range(self.N):
             if n == 0:
-                K1 = np.where(self.Z[n] == 1)[-1]
+                K1 = np.where(self.Z[n] == 1)[0][-1]
             else:
-                K_old = np.where(self.Z[n-1] == 1)[-1]
-                K_new = np.where(self.Z[n] == 1)[-1]
+                K_old = np.where(self.Z[n-1] == 1)[0][-1]
+                K_new = np.where(self.Z[n] == 1)[0][-1]
                 K1 = K_new - K_old
             if K1 > 0:
                 log_p_Z -= np.log(K1)
@@ -210,3 +219,28 @@ class IndianBuffetProcessGibbs:
     
     def log_p_X_Z(self):
         return self.log_conditional_X_given_Z() + self.log_p_Z()
+
+
+if __name__=="__main__":
+    seed = 2
+    X, weights = binary_LDS(num_samples=100, noise_scale=0.1, binary_prob=0.5, seed = 2)
+    
+    print(X.shape)
+    
+    prior_params = {
+        "init_alpha": 1.0, 
+        "prior_alpha_a": 1.0,
+        "prior_alpha_b": 1.0,
+        "init_sigma_x": 1.0, 
+        "prior_sigma_x_a": 1.0, 
+        "prior_sigma_x_b": 1.0, 
+        "init_sigma_A": 1.0, 
+        "prior_sigma_A_a": 1.0, 
+        "prior_sigma_A_b": 1.0, 
+    }
+
+    ibp = IndianBuffetProcessGibbs(X, num_iters=1000, prior_params=prior_params)
+    
+    history = ibp.gibbs_sampling()
+    
+    pass

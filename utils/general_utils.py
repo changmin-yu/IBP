@@ -18,7 +18,7 @@ def sampling_bernoulli(p: float, type: Optional[str] = None):
             return 0
         p = np.exp(p) / (1 + np.exp(p))
     
-    return np.random.random() < p
+    return (np.random.random() < p) * 1
 
 
 def expand_Z(Z: np.ndarray, n: int, K_new: int):
@@ -26,9 +26,9 @@ def expand_Z(Z: np.ndarray, n: int, K_new: int):
     Add K_new columns to the right of Z, where Z_new[n, -K_new:] = 1
     """
     N, K = Z.shape
-    Z_new = np.zeros((N, K + K_new), dtype=int)
+    Z_new = np.zeros((N, K + K_new))
     
-    Z_new[:, :K] = Z
+    Z_new[:, :K] = Z.copy()
     Z_new[n, K:] = 1
     
     return Z_new
