@@ -85,16 +85,16 @@ class IndianBuffetProcessGibbs:
             for i in pbar:
                 self.step()
                 
-                # log_p_X_Z = self.log_p_X_Z()
+                log_p_X_Z = self.log_p_X_Z()
                 
                 history["Z"].append(self.Z)
                 history["K"][i] = self.K
                 history["sigma_x"][i] = self.sigma_x
                 history["sigma_A"][i] = self.sigma_A
                 history["alpha"][i] = self.alpha
+                history["log_p_X_Z"][i] = log_p_X_Z
                 
                 pbar.set_description(f"Current K = {self.K}")
-                # history["log_p_X_Z"][i] = log_p_X_Z
         
         return history
         
@@ -148,19 +148,23 @@ class IndianBuffetProcessGibbs:
     def sample_K(self, n: int, log_threshold: float = -16.0):
         log_probs = np.array([])
         K_new = 0
-        # lmd = self.alpha / n # TODO: self.alpha / self.N?
+        # lmd = self.alpha / (n + 1) # TODO: self.alpha / self.N?
         lmd = self.alpha / self.N
         
         while log_Poisson_prob(K_new, lmd) > log_threshold:
             log_probs = np.append(log_probs, log_Poisson_prob(K_new, lmd) + self.log_conditional_X_given_Z(expand_Z(self.Z, n, K_new)))
             K_new += 1
         
-        # log_probs = np.array(log_probs)
-        log_probs -= np.max(log_probs)
-        probs = np.exp(log_probs)
-        probs /= np.sum(probs)
-        
-        K_posterior = np.argmax(np.random.multinomial(1, probs)) # np.random.choice(np.arange(K_new), size=(1, ), replace=False, p=probs)
+        if len(log_probs) > 0:
+            # log_probs = np.array(log_probs)
+            log_probs -= np.max(log_probs)
+            probs = np.exp(log_probs)
+            probs /= np.sum(probs)
+            
+            K_posterior = np.argmax(np.random.multinomial(1, probs)) # np.random.choice(np.arange(K_new), size=(1, ), replace=False, p=probs)
+        else:
+            K_posterior = 0
+            
         m = np.sum(self.Z, axis=0) - self.Z[n, :]
         self.Z = expand_Z(self.Z[:, m != 0], n, K_posterior)
         self.K = self.Z.shape[1]
@@ -201,13 +205,21 @@ class IndianBuffetProcessGibbs:
         K = self.Z.shape[-1]
         log_p_Z = -self.alpha * np.sum(1. / np.arange(1, self.N + 1)) + K * np.log(self.alpha)
         
+        K_curr = 0
+        
         for n in range(self.N):
             if n == 0:
-                K1 = np.where(self.Z[n] == 1)[0][-1]
+                if np.sum(self.Z[n] == 1) > 0:
+                    K1 = np.where(self.Z[n] == 1)[0][-1]
+                else:
+                    K1 = 0
             else:
-                K_old = np.where(self.Z[n-1] == 1)[0][-1]
-                K_new = np.where(self.Z[n] == 1)[0][-1]
-                K1 = K_new - K_old
+                if np.sum(self.Z[n] == 1) > 0:
+                    K_new = np.where(self.Z[n] == 1)[0][-1]
+                    K1 = K_new - K_curr
+                else:
+                    K1 = 0
+            K_curr += K1
             if K1 > 0:
                 log_p_Z -= np.log(K1)
         
