@@ -58,3 +58,7 @@ def bounded_random_walk(
         return 2 * right - new_x
     
     return new_x
+
+
+def sigmoid(x: Union[float, np.ndarray]):
+    return 1 / (1 + np.exp(-x))
