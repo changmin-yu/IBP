@@ -148,7 +148,6 @@ class IndianBuffetProcessGibbs:
     def sample_K(self, n: int, log_threshold: float = -16.0):
         log_probs = np.array([])
         K_new = 0
-        # lmd = self.alpha / (n + 1) # TODO: self.alpha / self.N?
         lmd = self.alpha / self.N
         
         while log_Poisson_prob(K_new, lmd) > log_threshold:
